@@ -94,6 +94,3 @@ This project is licensed under the MIT License.
 - [SQLAlchemy](https://www.sqlalchemy.org/)
 - [scikit-learn](https://scikit-learn.org/)
 
-```
-
-Feel free to customize this `README.md` with additional details specific to your project as needed.
