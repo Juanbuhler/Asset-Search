@@ -3,6 +3,14 @@
 
 Asset Search is a tool for managing and searching a collection of image assets using CLIP embeddings and KMeans clustering. It includes a Streamlit web application for interactive searching and viewing of image assets.
 
+<div>
+    <a href="https://www.loom.com/share/0612ce44814046f5a7f98492c07bf983">
+    </a>
+    <a href="https://www.loom.com/share/0612ce44814046f5a7f98492c07bf983">
+      <img style="max-width:300px;" src="https://cdn.loom.com/sessions/thumbnails/0612ce44814046f5a7f98492c07bf983-with-play.gif">
+    </a>
+  </div>
+
 ## Folder Structure
 
 ```
