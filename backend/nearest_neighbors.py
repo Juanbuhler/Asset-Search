@@ -37,7 +37,7 @@ class NearestNeighborsSearch:
 
         for asset in assets:
             quantized_embeddings = np.frombuffer(asset.embeddings, dtype=np.uint8)
-            self.embeddings.append(quantized_embeddings)
+            self.embeddings.append((quantized_embeddings - 127.5)/255)
             self.uris.append(asset.uri)
 
         self.embeddings = np.vstack(self.embeddings)
@@ -49,7 +49,7 @@ class NearestNeighborsSearch:
     def search(self, query):
         if isinstance(query, str):  # Text query
             embedding = self.processor.compute_text_embeddings([query])[0]
-            query_embedding = self.processor.quantize_embeddings(embedding)
+            query_embedding = (self.processor.quantize_embeddings(embedding) - 127.5) / 255
         else:  # Image embedding query
             query_embedding = query
 

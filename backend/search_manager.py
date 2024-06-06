@@ -31,7 +31,7 @@ class SearchManager:
             ).first()
 
             if query_image_asset:
-                query_embedding = np.frombuffer(query_image_asset.embeddings, dtype=np.uint8)
+                query_embedding = (np.frombuffer(query_image_asset.embeddings, dtype=np.uint8) - 127.5) / 255
                 results = self.searcher.search(query_embedding)
             else:
                 print("Query image not found in the database.")
@@ -47,6 +47,16 @@ class SearchManager:
             session.query(ImageAsset)
             .filter_by(dataset=dataset_name, cluster_index=cluster_id)
             .order_by(ImageAsset.distance_to_centroid)
+            .limit(N)
+            .all()
+        )
+        return [(result.uri, result.distance_to_centroid) for result in results]
+
+    def perform_outlier_search(self, dataset_name, N):
+        results = (
+            session.query(ImageAsset)
+            .filter_by(dataset=dataset_name)
+            .order_by(ImageAsset.distance_to_centroid.desc())
             .limit(N)
             .all()
         )
