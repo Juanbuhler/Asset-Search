@@ -7,9 +7,11 @@ from http.server import SimpleHTTPRequestHandler
 import socketserver
 
 from sqlalchemy import func
+from sqlalchemy.orm.exc import NoResultFound
 from backend.database import session, ImageAsset
 from backend.nearest_neighbors import NearestNeighborsSearch
 from backend.data_processor import DataProcessor
+from backend.config import DEFAULT_MODEL_TYPE
 import streamlit as st
 
 
@@ -18,21 +20,34 @@ class SearchManager:
     def __init__(self):
         self.searcher = NearestNeighborsSearch()
 
-    def perform_similarity_search(self, query, dataset_name, n_neighbors):
+    def perform_similarity_search(self, query, dataset_name, n_neighbors, embedding_type=DEFAULT_MODEL_TYPE, bias_query=""):
 
         if dataset_name == "All":
             dataset_name = "%"
         self.searcher.n_neighbors = n_neighbors
-        self.searcher.load_data(dataset_name=dataset_name)  # Only loads data if the dataset has changed
 
-        if query.startswith("file://") or query.startswith("http://"):  # URI query
+        embedding_attr = "embeddings"
+        if embedding_type == "clip":
+            embedding_attr = "embeddings"
+        elif embedding_type == "resnet152":
+            embedding_attr = "resnet_embeddings"
+        else:
+            raise ValueError(f"Unsupported model type: {embedding_type}")
+
+        self.searcher.load_data(dataset_name=dataset_name, embedding_type=embedding_type)  # Only loads data if the dataset has changed
+
+        if type(query) == np.ndarray:  # OpenCV image query
+            results = self.searcher.search(query, bias=bias_query)
+        elif query.startswith("file://") or query.startswith("http://"):  # URI query
             query_image_asset = session.query(ImageAsset).filter(
                 ImageAsset.uri.like(f"%{query}%")
             ).first()
 
             if query_image_asset:
-                query_embedding = (np.frombuffer(query_image_asset.embeddings, dtype=np.uint8) - 127.5) / 255
-                results = self.searcher.search(query_embedding)
+                embeddings = getattr(query_image_asset, embedding_attr)
+
+                query_embedding = (np.frombuffer(embeddings, dtype=np.uint8) - 127.5) / 255
+                results = self.searcher.search(query_embedding, bias=bias_query)
             else:
                 print("Query image not found in the database.")
                 return []
@@ -88,6 +103,20 @@ class SearchManager:
         if dataset_name == "All":
             dataset_name = "%"
         return session.query(func.count(ImageAsset.id)).filter(ImageAsset.dataset.like(dataset_name)).scalar()
+
+    def delete_image_assets_by_uris(self, uri_list):
+        for uri in uri_list:
+            try:
+                # Find the image asset by URI
+                image_asset = session.query(ImageAsset).filter(ImageAsset.uri == uri).one()
+                # Delete the image asset
+                session.delete(image_asset)
+            except NoResultFound:
+                print(f"No image asset found with URI: {uri}")
+            except Exception as e:
+                print(f"Error occurred while deleting URI: {uri}. Error: {e}")
+        # Commit the changes to the database
+        session.commit()
 
     def get_thumbnails(self, dataset_name,
                        n_images=None,

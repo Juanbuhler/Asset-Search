@@ -7,3 +7,5 @@ streamlit
 tqdm
 torch
 st_clickable_images
+streamlit-drawable-canvas==0.9.3
+opencv-python

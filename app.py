@@ -9,6 +9,14 @@ from st_clickable_images import clickable_images
 from backend.search_manager import SearchManager
 from backend.config import ROOT_IMAGE_DIRECTORY
 from backend.util import get_collage
+from backend.embedding_checker import check_populated_embeddings
+from PIL import Image
+import requests
+from io import BytesIO
+from streamlit_drawable_canvas import st_canvas
+import numpy as np
+import cv2
+
 
 st.set_page_config(layout='wide')
 
@@ -34,8 +42,9 @@ def main():
     search_manager = get_search_manager()
     available_datasets = search_manager.get_available_datasets()
 
-    display_section = st.sidebar.expander('Display Controls',)
+    display_section = st.sidebar.expander('Search Controls', expanded=True)
     cluster_section = st.sidebar.expander('Clustering Controls')
+    danger_section = st.sidebar.expander('Danger')
 
     if "current_dataset" not in st.session_state:
         st.session_state["current_dataset"] = available_datasets[0]
@@ -45,27 +54,98 @@ def main():
         st.session_state["clip_key"] = 1
         st.session_state["num_clusters"] = 10
 
-
-    selected_dataset = display_section.selectbox("Select Dataset", ["All"] + available_datasets)
+    selected_dataset = display_section.selectbox("Select Dataset", available_datasets)
+    available_embeddings = check_populated_embeddings(selected_dataset)
+    embedding_type = display_section.radio("Select Embedding", available_embeddings)
     n_neighbors = display_section.slider("Number of Assets to Show", min_value=10, value=50)
+    bias_query = display_section.checkbox("Use Text Query to Bias Search")
     thumbnail_size = display_section.slider("Thumbnail Size", min_value=50, max_value=250, step=50, value=100)
+
+    if "targeted_search_selection" not in st.session_state:
+        st.session_state["targeted_search_selection"] = False
+
+    if "do_targeted_search" not in st.session_state:
+        st.session_state["do_targeted_search"] = False
+
+    if st.session_state["do_targeted_search"]:
+        if display_section.button("Cancel targeted search"):
+            st.session_state["do_targeted_search"] = False
+            st.rerun()
+    else:
+        if display_section.button("Select one image for targeted search"):
+            st.session_state["targeted_search_selection"] = True
 
     if st.session_state.current_dataset != selected_dataset:
         st.session_state.current_dataset = selected_dataset
         st.session_state.search_results = None
 
-    st.title(selected_dataset)
+    if st.session_state["targeted_search_selection"]:
+        st.title("Click One Image for Targeted Search")
+    else:
+        st.title(selected_dataset)
     num_assets = search_manager.count_assets_in_dataset(selected_dataset)
     st.write(f"{num_assets} images")
 
     clip_key = st.session_state.clip_key
-    text_query = st.text_input("Enter text to search", key=f"{clip_key}")
-    if text_query != "":
-        clip_key += 1
-        st.session_state.clip_key = clip_key
-        similarity_results = search_manager.perform_similarity_search(text_query, selected_dataset, n_neighbors)
-        st.session_state.search_results = [result[0] for result in similarity_results]
-        st.rerun()
+
+    # Only show text query if embedding is CLIP
+    if embedding_type == "clip":
+        text_query = st.text_input("Enter text to search", key=f"{clip_key}", value=st.session_state.text_query)
+        if text_query != "" and text_query != st.session_state.text_query and not bias_query:
+            clip_key += 1
+            st.session_state.clip_key = clip_key
+            st.session_state.text_query = text_query
+            similarity_results = search_manager.perform_similarity_search(text_query,
+                                                                          selected_dataset,
+                                                                          n_neighbors,
+                                                                          embedding_type=embedding_type)
+            st.session_state.search_results = [result[0] for result in similarity_results]
+            st.rerun()
+        else:
+            st.session_state.text_query = text_query
+
+    if st.session_state["do_targeted_search"]:
+        # Specify canvas parameters in application
+        stroke_width = 3
+        stroke_color = '#f22'
+        bg_color = "#eee"
+        drawing_mode = "rect"
+        realtime_update = True
+
+        target_image = st.session_state["target_image"].split('://')[1]
+        img = cv2.imread(target_image)
+        img = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
+        canvas_result = st_canvas(
+            fill_color="rgba(255, 165, 0, 0.1)",  # Fixed fill color with some opacity
+            stroke_width=stroke_width,
+            stroke_color=stroke_color,
+            background_color=bg_color,
+            update_streamlit=realtime_update,
+            width=800,
+            height=600,
+            drawing_mode=drawing_mode,
+            key="canvas",
+            background_image=Image.open(target_image) if target_image else None,
+        )
+        if canvas_result.json_data is not None:
+            if canvas_result.json_data["objects"]:
+                rect = canvas_result.json_data["objects"][-1]
+                x = rect['left']
+                y = rect['top']
+                w = rect['width']
+                h = rect['height']
+                x = int(x * img.shape[1] / 800)
+                y = int(y * img.shape[0] / 600)
+                w = int(w * img.shape[1] / 800)
+                h = int(h * img.shape[0] / 600)
+                cropped = img[y:y + h, x:x + w]
+                similarity_results = search_manager.perform_similarity_search(cv2.resize(cropped, (224, 224)),
+                                                                              selected_dataset,
+                                                                              n_neighbors,
+                                                                              embedding_type=embedding_type)
+                st.session_state.search_results = [result[0] for result in similarity_results]
+                st.session_state.clicked = -1
+
 
     display_page = 0
     if st.session_state.search_results:
@@ -141,6 +221,16 @@ def main():
 
     data_urls = [convert_file_uri_to_data_url(uri) for uri in image_uris]
 
+    if danger_section.button("Delete Displayed Images From Database"):
+        if st.session_state.search_results:
+            search_manager.delete_image_assets_by_uris(st.session_state.search_results)
+            st.session_state.search_results = None
+            st.session_state.clicked = -1
+            st.session_state.text_query = ""
+            st.rerun()
+        else:
+            st.title("Perform a search before trying to delete assets")
+
     if 'clicked' not in st.session_state:
         st.session_state["clicked"] = -1
     old_clicked = st.session_state.clicked
@@ -153,12 +243,26 @@ def main():
     )
 
     if clicked > -1 and clicked != old_clicked:
-        st.session_state.clip_key += 1
-        selected_image_uri = image_uris[clicked]
-        similarity_results = search_manager.perform_similarity_search(selected_image_uri, selected_dataset, n_neighbors)
-        st.session_state.search_results = [result[0] for result in similarity_results]
-        st.session_state.clicked = clicked
-        st.rerun()
+        if st.session_state["targeted_search_selection"]:
+            st.session_state["targeted_search_selection"] = False
+            st.session_state["do_targeted_search"] = True
+            st.session_state["target_image"] = image_uris[clicked]
+            st.rerun()
+        else:
+            bias_query_text = ""
+            if bias_query:
+                bias_query_text = text_query
+            else:
+                st.session_state.text_query = ""
+            st.session_state.clip_key += 1
+            selected_image_uri = image_uris[clicked]
+            similarity_results = search_manager.perform_similarity_search(selected_image_uri,
+                                                                          selected_dataset,
+                                                                          n_neighbors, bias_query=bias_query_text,
+                                                                          embedding_type=embedding_type)
+            st.session_state.search_results = [result[0] for result in similarity_results]
+            st.session_state.clicked = clicked
+            st.rerun()
 
 
 if __name__ == "__main__":

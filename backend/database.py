@@ -14,7 +14,9 @@ class ImageAsset(Base):
     id = Column(Integer, primary_key=True)
     uri = Column(String, unique=True, nullable=False)
     dataset = Column(String, nullable=False)
-    embeddings = Column(LargeBinary)
+    embeddings = Column(LargeBinary)  # CLIP, these are default
+    resnet_embeddings = Column(LargeBinary)
+    perceptual_embeddings = Column(LargeBinary)
     cluster_index = Column(Integer, nullable=True)  # New column for cluster indices
     distance_to_centroid = Column(Float, nullable=True)
 
@@ -38,6 +40,21 @@ def add_cluster_column():
     try:
         connection.execute(text('ALTER TABLE image_assets ADD COLUMN distance_to_centroid FLOAT'))
         connection.execute(text('ALTER TABLE image_assets ADD COLUMN cluster_index INTEGER'))
+    except OperationalError as e:
+        if "duplicate column name" in str(e):
+            # Column already exists
+            pass
+        else:
+            raise
+    finally:
+        connection.close()
+
+
+def add_resnet_column():
+    connection = engine.connect()
+    try:
+        connection.execute(text('ALTER TABLE image_assets ADD COLUMN resnet_embeddings BLOB'))
+        connection.execute(text('ALTER TABLE image_assets ADD COLUMN perceptual_embeddings BLOB'))
     except OperationalError as e:
         if "duplicate column name" in str(e):
             # Column already exists
