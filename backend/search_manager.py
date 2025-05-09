@@ -2,6 +2,7 @@
 import os
 import numpy as np
 import urllib.parse
+import shutil
 import threading
 from http.server import SimpleHTTPRequestHandler
 import socketserver
@@ -11,9 +12,10 @@ from sqlalchemy.orm.exc import NoResultFound
 from backend.database import session, ImageAsset
 from backend.nearest_neighbors import NearestNeighborsSearch
 from backend.data_processor import DataProcessor
-from backend.config import DEFAULT_MODEL_TYPE
+from backend.config import DEFAULT_MODEL_TYPE, DATABASE_URI, ROOT_IMAGE_DIRECTORY
 import streamlit as st
-
+from sqlalchemy import create_engine
+from sqlalchemy.orm import sessionmaker
 
 @st.cache_resource(show_spinner=False)
 class SearchManager:
@@ -150,6 +152,76 @@ class SearchManager:
             uris = [thumbnail[0] for thumbnail in query_results]
 
         return thumbnails, uris
+
+    def get_captions(self, uris):
+        """
+        Retrieve captions for a list of image URIs from the database.
+
+        Args:
+            uris (list): List of image URIs as stored in the database.
+
+        Returns:
+            dict: Mapping of URIs to their corresponding captions.
+        """
+        engine = create_engine(f'sqlite:///{DATABASE_URI}')
+        Session = sessionmaker(bind=engine)
+        session = Session()
+        # Retrieve all relevant captions with a single query
+        result = {img.uri: img.caption for img in
+                  session.query(ImageAsset).filter(ImageAsset.uri.in_(uris)).all()}
+        return result
+
+    def copy_image_assets(self, uris, new_dataset_name):
+        """
+        Copies database entries corresponding to the given URIs to a new dataset
+        and copies the image files to a new location.
+
+        Args:
+            uris (list): List of image URIs to copy.
+            new_dataset_name (str): The name of the new dataset.
+            DATABASE_URI (str): The URI of the database to copy to.
+            ROOT_IMAGE_DIRECTORY (str): The root directory for image storage.
+        """
+        try:
+            # Retrieve the ImageAsset objects from the database
+            assets_to_copy = session.query(ImageAsset).filter(ImageAsset.uri.in_(uris)).all()
+
+            # Create the new dataset directory if it doesn't exist
+            new_dataset_directory = os.path.join(ROOT_IMAGE_DIRECTORY, new_dataset_name)
+            os.makedirs(new_dataset_directory, exist_ok=True)
+
+            # Create new ImageAsset objects with the new dataset name and copy files
+            new_assets = []
+            for asset in assets_to_copy:
+                # Extract the file path from the URI
+                file_path = asset.uri
+                if file_path.startswith("file://"):
+                    file_path = file_path[7:]  # Remove "file://" prefix
+
+                source_file = os.path.join(os.path.dirname(file_path), os.path.basename(file_path))
+                destination_file = os.path.join(new_dataset_directory, os.path.basename(file_path))
+
+                # Copy the file
+                shutil.copy2(source_file, destination_file)  # copy2 preserves metadata
+
+                # Create new ImageAsset object
+                new_asset = ImageAsset(**{key: value for key, value in asset.__dict__.items()
+                                          if key != 'id' and key != '_sa_instance_state'})
+                new_asset.dataset = new_dataset_name
+                new_asset.uri = "file://" + destination_file  # Store the new file path
+                new_assets.append(new_asset)
+
+            # Add the new assets to the session
+            session.add_all(new_assets)
+
+            # Commit the changes to the database
+            session.commit()
+
+            print(f"Successfully copied {len(new_assets)} assets to dataset '{new_dataset_name}'")
+
+        except Exception as e:
+            session.rollback()
+            print(f"Error copying assets: {e}")
 
     def start_http_server(self, image_folder, port):
         os.chdir(image_folder)

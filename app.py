@@ -5,9 +5,9 @@ import os
 sys.path.append(os.path.dirname(os.path.abspath(__file__)))
 
 import streamlit as st
-from st_clickable_images import clickable_images
+from st_click_detector import click_detector
 from backend.search_manager import SearchManager
-from backend.config import ROOT_IMAGE_DIRECTORY
+from backend.config import ROOT_IMAGE_DIRECTORY, DATABASE_URI
 from backend.util import get_collage
 from backend.embedding_checker import check_populated_embeddings
 from PIL import Image
@@ -44,7 +44,7 @@ def main():
 
     display_section = st.sidebar.expander('Search Controls', expanded=True)
     cluster_section = st.sidebar.expander('Clustering Controls')
-    danger_section = st.sidebar.expander('Danger')
+    danger_section = st.sidebar.expander('Dataset Management')
 
     if "current_dataset" not in st.session_state:
         st.session_state["current_dataset"] = available_datasets[0]
@@ -57,9 +57,10 @@ def main():
     selected_dataset = display_section.selectbox("Select Dataset", available_datasets)
     available_embeddings = check_populated_embeddings(selected_dataset)
     embedding_type = display_section.radio("Select Embedding", available_embeddings)
-    n_neighbors = display_section.slider("Number of Assets to Show", min_value=10, value=50)
+    n_neighbors = display_section.slider("Number of Assets to Show", min_value=10, value=20)
     bias_query = display_section.checkbox("Use Text Query to Bias Search")
-    thumbnail_size = display_section.slider("Thumbnail Size", min_value=50, max_value=250, step=50, value=100)
+    thumbnail_size = display_section.slider("Thumbnail Size", min_value=50, max_value=300, step=50, value=200)
+    show_captions = display_section.checkbox("Show Captions")
 
     if "targeted_search_selection" not in st.session_state:
         st.session_state["targeted_search_selection"] = False
@@ -221,6 +222,9 @@ def main():
 
     data_urls = [convert_file_uri_to_data_url(uri) for uri in image_uris]
 
+    new_dataset = danger_section.text_input("New Dataset Name")
+    if danger_section.button("Copy images to new dataset"):
+        search_manager.copy_image_assets(image_uris, new_dataset)
     if danger_section.button("Delete Displayed Images From Database"):
         if st.session_state.search_results:
             search_manager.delete_image_assets_by_uris(st.session_state.search_results)
@@ -235,18 +239,105 @@ def main():
         st.session_state["clicked"] = -1
     old_clicked = st.session_state.clicked
 
-    clicked = clickable_images(
-        data_urls,
-        div_style={"display": "flex", "justify-content": "center", "flex-wrap": "wrap"},
-        img_style={"margin": "5px", "height": f"{thumbnail_size}px"},
-        key=f'thumbnails{clip_key}'
-    )
+    if "images_selection" not in st.session_state:
+        st.session_state["images_selection"] = []
 
-    if clicked > -1 and clicked != old_clicked:
+    if "select_images" not in st.session_state:
+        st.session_state["select_images"] = False
+
+    if danger_section.button("Select Images"):
+        st.session_state["select_images"] = True
+
+
+    html_images = ''' <style>
+        .image-container {
+            margin-bottom: 20px;
+            padding: 10px;
+            background-color: #111;
+            display: inline-block;
+            max-width: 300px;
+            width: auto;
+        }
+        .image-container-selected {
+            margin-bottom: 20px;
+            padding: 10px;
+            background-color: #111;
+            border-color: #FFF;
+            border: 100px;
+            display: inline-block;
+            max-width: 300px;
+            width: auto;
+        }
+        .image-container img {
+            display: block;
+            margin-right: 0;
+            margin-bottom: 10px;
+        }
+
+        .caption {
+            overflow-wrap: break-word;
+            word-wrap: break-word;
+            word-break: break-all;
+            width: 100%;
+            white-space: normal;
+        }
+    </style> '''
+
+    if show_captions:
+        captions = search_manager.get_captions(image_uris)
+    else:
+        captions = {uri: "" for uri in image_uris}
+
+    for id, url in enumerate(data_urls):
+        html_image = f'''
+            <div class="image-container">
+                <a href="#" id="{id}">
+                    <img style="height: {thumbnail_size}px; border: 10px solid #111111" src="{url}" alt="Image {id}">
+                </a>
+                <div class="caption">
+                    <p>{captions[image_uris[id]]}</p>
+                </div>
+            </div>
+        '''
+        if url in st.session_state["images_selection"]:
+            html_image = f'''
+                <div class="image-container">
+                    <a href="#" id="{id}">
+                        <img style="height: {thumbnail_size}px; border: 10px solid #FF1111" src="{url}" alt="Image {id}">
+                    </a>
+                    <div class="caption">
+                        <p>{captions[image_uris[id]]}</p>
+                    </div>
+                </div>
+            '''
+        html_images += html_image
+
+    clicked = click_detector(html_images)
+
+    if st.session_state["select_images"]:
+        if clicked and clicked != old_clicked:
+            if image_uris[int(clicked)] in st.session_state["images_selection"]:
+                st.session_state["images_selection"] = [u for u in st.session_state["images_selection"]
+                                                        if u != image_uris[int(clicked)]]
+            else:
+                st.session_state["images_selection"].append(image_uris[int(clicked)])
+            print(st.session_state["images_selection"])
+            st.session_state.clicked = clicked
+            st.rerun()
+
+    #clicked = clickable_images(
+    #    data_urls,
+    #    div_style={"display": "flex", "justify-content": "center", "flex-wrap": "wrap"},
+    #   img_style={"margin": "5px", "height": f"{thumbnail_size}px"},
+    #    key=f'thumbnails{clip_key}'
+    #)
+
+
+    if clicked and clicked != old_clicked:
         if st.session_state["targeted_search_selection"]:
             st.session_state["targeted_search_selection"] = False
             st.session_state["do_targeted_search"] = True
-            st.session_state["target_image"] = image_uris[clicked]
+            st.session_state["target_image"] = image_uris[int(clicked)]
             st.rerun()
         else:
             bias_query_text = ""
@@ -255,7 +346,7 @@ def main():
             else:
                 st.session_state.text_query = ""
             st.session_state.clip_key += 1
-            selected_image_uri = image_uris[clicked]
+            selected_image_uri = image_uris[int(clicked)]
             similarity_results = search_manager.perform_similarity_search(selected_image_uri,
                                                                           selected_dataset,
                                                                           n_neighbors, bias_query=bias_query_text,
